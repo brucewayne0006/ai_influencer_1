@@ -15,11 +15,14 @@ PUBLIC_DOMAIN   = os.getenv("PUBLIC_DOMAIN")
 # two versions: text-only FLUX and image-guided InstantID-for-FLUX
 VER_FLUX        = os.getenv("REPLICATE_VERSION_FLUX")
 VER_INSTANTID   = os.getenv("REPLICATE_VERSION_INSTANTID")  # optional until you add it
-print("AIRTABLE_BASE:", os.getenv("AIRTABLE_BASE"))
-print("REP TOK:", (os.getenv("REPLICATE_TOKEN") or "")[:6] + "..." )
-print("VER_FLUX:", os.getenv("REPLICATE_VERSION_FLUX"))
-print("PUBLIC_DOMAIN:", os.getenv("PUBLIC_DOMAIN"))
+def _mask(s): 
+    return (s[:6] + "…" + s[-4:]) if s else "MISSING"
 
+print("ENV CHECK:",
+      "AIRTABLE_BASE:", os.getenv("AIRTABLE_BASE"),
+      "| VER_FLUX:", os.getenv("REPLICATE_VERSION_FLUX"),
+      "| PUBLIC_DOMAIN:", os.getenv("PUBLIC_DOMAIN"),
+      "| REP TOKEN:", _mask(os.getenv("REPLICATE_TOKEN")))
 
 AIRTABLE_API = "https://api.airtable.com/v0"
 
@@ -44,7 +47,10 @@ async def replicate_create(payload: dict):
     async with httpx.AsyncClient(
         headers={"Authorization": f"Token {REPLICATE_TOKEN}"}, timeout=60
     ) as c:
+        who = await c.get("https://api.replicate.com/v1/account")
+        print("WHOAMI:", who.status_code, who.text)  # must be 200
         r = await c.post("https://api.replicate.com/v1/predictions", json=payload)
+        print("REPLICATE RESP:", r.status_code, r.text)  # see exact error
         return r
 
 @app.get("/generate")
@@ -99,11 +105,13 @@ async def generate(rid: str):
 
     r = await replicate_create(payload)
     if r.status_code >= 400:
+        err = f"Replicate {r.status_code}: {r.text}"
         await airtable_update(rid, {"Status": "failed", "Error": f"Replicate {r.status_code}: {r.text}"})
-        return {"ok": False}
+        return {"ok": False, "error":err}
 
     await airtable_update(rid, {"Status": "processing"})
     return {"ok": True}
+
 
 @app.post("/done")
 async def done(request: Request):
@@ -124,3 +132,13 @@ async def done(request: Request):
         "Outputs": [{"url": u} for u in outputs]
     })
     return {"ok": True}
+
+@app.get("/debug_env")
+def debug_env():
+    return {
+        "AIRTABLE_BASE": bool(AIRTABLE_BASE),
+        "AIRTABLE_TABLE": AIRTABLE_TABLE,
+        "REPLICATE_VERSION_FLUX": bool(os.getenv("REPLICATE_VERSION_FLUX")),
+        "PUBLIC_DOMAIN": PUBLIC_DOMAIN,
+        "REPLICATE_TOKEN_loaded": bool(REPLICATE_TOKEN)
+    }
